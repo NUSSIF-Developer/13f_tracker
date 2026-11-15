@@ -81,6 +81,19 @@ def send_telegram(
             if response.ok and response.json().get("ok"):
                 return
             last_error = f"HTTP {response.status_code}"
+            if response.status_code == 400:
+                try:
+                    description = response.json().get("description", "").lower()
+                except (ValueError, AttributeError):
+                    description = ""
+                if "chat not found" in description:
+                    last_error += " (chat not found; check TELEGRAM_CHAT_ID and bot access)"
+                elif "can't parse entities" in description:
+                    last_error += " (invalid message formatting)"
+                elif "message is too long" in description:
+                    last_error += " (message is too long)"
+                else:
+                    last_error += " (bad request; check chat configuration and message)"
         except requests.RequestException as exc:
             last_error = type(exc).__name__
         if attempt < retries - 1:
