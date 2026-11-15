@@ -5,9 +5,15 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 from thirteenf.sector import SECTOR_COLORS, SECTOR_OPTIONS
+from thirteenf.theme_signal import ALLOWED_THEMES
 
 
 SECTOR_ORDER = [*SECTOR_OPTIONS, "Unknown"]
+THEME_COLORS = [
+    "#1b4965", "#ca6702", "#2a9d8f", "#c44536", "#577590", "#8f5d9f",
+    "#e9c46a", "#264653", "#f28482", "#6a994e", "#5e548e", "#adb5bd",
+    "#495057",
+]
 
 
 def _quarter_order(values: pd.Series) -> list[str]:
@@ -112,6 +118,58 @@ def build_overall_sector_rotation_chart(overall_df: pd.DataFrame, weighting: str
     )
     figure = _sector_layout(figure, yaxis_title="Aggregate weight", hovermode="x unified")
     figure.update_yaxes(range=[0, 100])
+    return figure
+
+
+def build_theme_allocation_history_chart(history: pd.DataFrame, measure: str = "allocation") -> object:
+    """Plot full-history Duquesne theme allocation as a stacked area chart."""
+    allowed_measures = {"allocation", "value"}
+    if measure not in allowed_measures:
+        raise ValueError(f"measure must be one of {sorted(allowed_measures)}")
+    value_column = "portfolio_weight" if measure == "allocation" else "market_value_usd"
+    value_label = "Portfolio allocation" if measure == "allocation" else "Reported value"
+    title = "Duquesne quarterly theme allocation" if measure == "allocation" else "Duquesne disclosed value by theme"
+    columns = {"quarter": [], "theme": [], value_column: []}
+    if history.empty:
+        return px.area(pd.DataFrame(columns=columns), x="quarter", y=value_column, color="theme", title=title)
+
+    data = history.copy()
+    theme_order = [*ALLOWED_THEMES, "Unclassified"]
+    quarters = _quarter_order(data["quarter"])
+    present_themes = [theme for theme in theme_order if theme in set(data["theme"])]
+    complete = pd.MultiIndex.from_product(
+        [quarters, present_themes], names=["quarter", "theme"],
+    ).to_frame(index=False)
+    grouped = data.groupby(["quarter", "theme"], as_index=False)[value_column].sum()
+    complete = complete.merge(grouped, on=["quarter", "theme"], how="left").fillna({value_column: 0.0})
+    color_map = dict(zip(theme_order, THEME_COLORS))
+    figure = px.area(
+        complete,
+        x="quarter",
+        y=value_column,
+        color="theme",
+        title=title,
+        color_discrete_map=color_map,
+        category_orders={"quarter": quarters, "theme": present_themes},
+    )
+    figure.update_traces(
+        hovertemplate=f"Quarter=%{{x}}<br>Theme=%{{fullData.name}}<br>{value_label}=%{{y:,.2f}}<extra></extra>"
+    )
+    figure.update_layout(
+        xaxis_title="Report quarter",
+        yaxis_title="Portfolio allocation (%)" if measure == "allocation" else "Reported value (USD)",
+        template="plotly_white",
+        hovermode="x unified",
+        legend_title_text="Theme",
+        legend=dict(orientation="h", yanchor="top", y=-0.42, xanchor="left", x=0),
+        margin=dict(t=65, r=20, b=190, l=70),
+        height=590,
+    )
+    figure.update_xaxes(type="category", tickangle=-55, nticks=min(len(quarters), 26))
+    if measure == "allocation":
+        figure.update_yaxes(range=[0, 100], ticksuffix="%")
+    else:
+        figure.update_yaxes(tickprefix="$", separatethousands=True)
     return figure
 
 

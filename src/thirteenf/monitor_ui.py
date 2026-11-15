@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 import streamlit as st
 
+from thirteenf.config import DATA_DIR
 from thirteenf.sec_live import filing_html_url
 
 from thirteenf.filing_monitor import (
@@ -13,6 +16,86 @@ from thirteenf.filing_monitor import (
 from thirteenf.visuals import (
     build_monitor_sector_change_chart,
 )
+from thirteenf.theme_signal import (
+    THEME_CLASSIFICATION_COLUMNS,
+    build_duquesne_position_changes,
+    build_duquesne_theme_allocation_history,
+    summarize_theme_position_changes,
+)
+from thirteenf.visuals import build_theme_allocation_history_chart
+
+
+THEME_CLASSIFICATION_PATH = DATA_DIR / "issuer_theme_classifications.csv"
+
+
+@st.cache_data(show_spinner=False)
+def _theme_signal_payload(
+    snapshot: pd.DataFrame,
+    classifications: pd.DataFrame,
+    quarters: int,
+) -> dict[str, pd.DataFrame]:
+    changes = build_duquesne_position_changes(
+        snapshot, classifications, quarters=quarters,
+    )
+    return {
+        "position_changes": changes,
+        "theme_summary": summarize_theme_position_changes(changes),
+        "allocation_history": build_duquesne_theme_allocation_history(snapshot, classifications),
+    }
+
+
+@st.cache_data(show_spinner=False)
+def _load_theme_classifications(path_text: str, modified_ns: int) -> pd.DataFrame:
+    _ = modified_ns
+    path = Path(path_text)
+    try:
+        return pd.read_csv(path, dtype={"cusip": str})
+    except FileNotFoundError:
+        return pd.DataFrame(columns=THEME_CLASSIFICATION_COLUMNS)
+
+
+def _render_theme_reductions(changes: pd.DataFrame) -> None:
+    reductions = changes[changes["change_type"].isin(["Share decrease", "Full exit"])].copy()
+    st.subheader("Reduced and exited positions")
+    st.caption(
+        "Share decreases and full exits are included in the filing comparison. A full exit means the issuer "
+        "is absent from the current disclosed common-share book; it does not reveal when the position was sold."
+    )
+    if reductions.empty:
+        st.info("No reduced or exited positions are present in this comparison window.")
+        return
+
+    reduction_types = st.multiselect(
+        "Reduction types", ["Share decrease", "Full exit"],
+        default=["Share decrease", "Full exit"], key="duquesne_theme_reduction_filter",
+    )
+    linked = _with_filing_links(reductions[reductions["change_type"].isin(reduction_types)].copy())
+    linked["accepted_at"] = _accepted_text(linked["accepted_at"])
+    columns = [
+        "accepted_at", "quarter", "prior_quarter", "change_type", "asset", "themes",
+        "previous_shares", "current_shares", "share_change", "weight_change_pp",
+        "previous_value_usd", "current_value_usd", "classification_confidence", "filing_url",
+    ]
+    st.dataframe(
+        linked[columns], width="stretch", height=420, hide_index=True,
+        column_config={
+            "accepted_at": st.column_config.TextColumn("Accepted at"),
+            "quarter": st.column_config.TextColumn("Quarter"),
+            "prior_quarter": st.column_config.TextColumn("Compared with"),
+            "change_type": st.column_config.TextColumn("Change"),
+            "asset": st.column_config.TextColumn("Issuer"),
+            "themes": st.column_config.TextColumn("Theme"),
+            "previous_shares": st.column_config.NumberColumn("Prior shares", format="%,.0f"),
+            "current_shares": st.column_config.NumberColumn("Current shares", format="%,.0f"),
+            "share_change": st.column_config.NumberColumn("Share change", format="%+,.0f"),
+            "weight_change_pp": st.column_config.NumberColumn("Weight change", format="%+.2f pp"),
+            "previous_value_usd": st.column_config.NumberColumn("Prior value", format="$%,.0f"),
+            "current_value_usd": st.column_config.NumberColumn("Current value", format="$%,.0f"),
+            "classification_confidence": st.column_config.NumberColumn("Tag confidence", format="%.2f"),
+            "filing_url": st.column_config.LinkColumn("SEC filing", display_text="Open filing"),
+        },
+    )
+    _download_table("Download reductions and exits", linked, "duquesne_theme_reductions.csv", "download_duquesne_theme_reductions")
 
 
 @st.cache_data(show_spinner=False)
@@ -329,4 +412,180 @@ def render_filing_change_monitor(snapshot: pd.DataFrame, section: str = "Asset C
     st.info(
         "Interpretation: these are delayed, long-only disclosed-book changes. A new alert is a research prompt, "
         "not evidence that the manager still holds the position today or that the position was unhedged."
+    )
+
+
+def render_duquesne_theme_signal(snapshot: pd.DataFrame) -> None:
+    """Render share-based Duquesne accumulation candidates and theme exposure."""
+    st.caption(
+        "Duquesne-only view of reported common-share additions and increases. Filing snapshots do not reveal "
+        "transaction dates, hedges, or the manager's complete portfolio."
+    )
+    with st.expander("Theme signal settings", expanded=False):
+        quarters = st.slider(
+            "Recent report quarters", 2, 20, 8, 1,
+            help="Compare each Duquesne report with its immediately preceding available report.",
+            key="duquesne_theme_quarters",
+        )
+        min_confidence = st.slider(
+            "Minimum classification confidence", 0.0, 1.0, 0.7, 0.05,
+            help="Filters the theme summary only. Issuer-level position changes remain visible.",
+            key="duquesne_theme_confidence",
+        )
+
+    uploaded = st.file_uploader(
+        "Theme classifications CSV", type=["csv"], key="duquesne_theme_classifications_upload",
+        help=(
+            "Optional issuer theme tags with confidence, evidence, source_url, and model_id columns. "
+            "Without an upload, the saved local classification file is used when present."
+        ),
+    )
+    if uploaded is not None:
+        try:
+            classifications = pd.read_csv(uploaded, dtype={"cusip": str})
+        except Exception as exc:
+            st.error(f"Could not read theme classifications: {exc}")
+            return
+    else:
+        modified_ns = THEME_CLASSIFICATION_PATH.stat().st_mtime_ns if THEME_CLASSIFICATION_PATH.exists() else 0
+        classifications = _load_theme_classifications(str(THEME_CLASSIFICATION_PATH), modified_ns)
+
+    with st.spinner("Comparing Duquesne disclosure snapshots..."):
+        payload = _theme_signal_payload(snapshot, classifications, quarters)
+    changes = payload["position_changes"]
+    accumulation = changes[changes["change_type"].isin(["New position", "Share increase"])].copy()
+    classified = accumulation[accumulation["themes"].fillna("").ne("")]
+    summary = summarize_theme_position_changes(changes, min_confidence=min_confidence)
+
+    metrics = st.columns(3)
+    metrics[0].metric("New positions", int(accumulation["change_type"].eq("New position").sum()))
+    metrics[1].metric("Share increases", int(accumulation["change_type"].eq("Share increase").sum()))
+    metrics[2].metric("Classified candidates", f"{len(classified)} / {len(accumulation)}")
+
+    history = payload["allocation_history"]
+    st.subheader("Theme allocation across all available filings")
+    if history.empty:
+        st.info("No Duquesne quarterly holdings are available for the allocation chart.")
+    else:
+        first_quarter = history["quarter"].min()
+        latest_quarter = history["quarter"].max()
+        first_accepted = history.loc[history["quarter"].eq(first_quarter), "accepted_at"].max()
+        first_accepted_text = _accepted_text(pd.Series([first_accepted])).iloc[0]
+        unclassified = history[history["theme"].eq("Unclassified")]
+        latest_unclassified_weight = (
+            float(unclassified.loc[unclassified["quarter"].eq(latest_quarter), "portfolio_weight"].sum())
+            if not unclassified.empty else 0.0
+        )
+        st.caption(
+            f"Showing {history['quarter'].nunique()} reports from {first_quarter} "
+            f"(first public acceptance: {first_accepted_text}) through {latest_quarter}. "
+            f"Weights are normalized across disclosed common shares; options are excluded. "
+            f"Unclassified share of latest common-equity value: {latest_unclassified_weight:.2f}%."
+        )
+        measure = st.radio(
+            "Chart measure", ["Portfolio allocation (%)", "Reported value ($)"],
+            horizontal=True, key="duquesne_theme_history_measure",
+        )
+        st.plotly_chart(
+            build_theme_allocation_history_chart(
+                history, "allocation" if measure == "Portfolio allocation (%)" else "value",
+            ),
+            width="stretch", theme=None, config={"displayModeBar": False},
+            key="duquesne_theme_history_chart",
+        )
+        _download_table(
+            "Download full theme history", history,
+            "duquesne_theme_allocation_history.csv", "download_duquesne_theme_history",
+        )
+
+    _render_theme_reductions(changes)
+
+    st.subheader("Theme exposure")
+    if summary.empty:
+        st.info("No new or increased positions currently meet the theme classification threshold.")
+    else:
+        st.dataframe(
+            summary,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "quarter": st.column_config.TextColumn("Quarter"),
+                "prior_quarter": st.column_config.TextColumn("Compared with"),
+                "theme": st.column_config.TextColumn("Theme", width="large"),
+                "new_positions": st.column_config.NumberColumn("New", format="%d"),
+                "increased_positions": st.column_config.NumberColumn("Increased", format="%d"),
+                "current_value_usd": st.column_config.NumberColumn("Current disclosed value", format="$%,.0f"),
+                "current_weight_of_changed_positions": st.column_config.NumberColumn("Current weight", format="%.2f%%"),
+                "weight_change_pp": st.column_config.NumberColumn("Weight change", format="%+.2f pp"),
+                "classified_positions": st.column_config.NumberColumn("Classified issuers", format="%d"),
+            },
+        )
+        _download_table("Download theme summary", summary, "duquesne_theme_summary.csv", "download_duquesne_theme_summary")
+
+    st.subheader("New and increased positions")
+    if accumulation.empty:
+        st.info("No comparable Duquesne share additions or increases are available in this window.")
+        return
+
+    theme_values = sorted({
+        theme
+        for value in accumulation["themes"].fillna("")
+        for theme in str(value).split("; ") if theme
+    })
+    theme_options = ["Unclassified", *theme_values]
+    left, right = st.columns(2)
+    selected_changes = left.multiselect(
+        "Position changes", ["New position", "Share increase"],
+        default=["New position", "Share increase"], key="duquesne_theme_change_filter",
+    )
+    selected_themes = right.multiselect(
+        "Themes", theme_options, default=theme_options, key="duquesne_theme_filter",
+    )
+    visible = accumulation[accumulation["change_type"].isin(selected_changes)].copy()
+    visible["_theme_filter"] = visible["themes"].fillna("").where(visible["themes"].fillna("").ne(""), "Unclassified")
+    visible = visible[
+        visible["_theme_filter"].apply(
+            lambda value: any(theme in selected_themes for theme in str(value).split("; "))
+        )
+    ].drop(columns="_theme_filter")
+    linked = _with_filing_links(visible)
+    linked["accepted_at"] = _accepted_text(linked["accepted_at"])
+    display_columns = [
+        "accepted_at", "quarter", "prior_quarter", "change_type", "asset", "themes",
+        "previous_shares", "current_shares", "share_change", "weight_change_pp",
+        "current_value_usd", "classification_confidence", "classification_evidence",
+        "classification_source_url", "filing_url",
+    ]
+    st.dataframe(
+        linked[display_columns], width="stretch", height=520, hide_index=True,
+        column_config={
+            "accepted_at": st.column_config.TextColumn("Accepted at"),
+            "quarter": st.column_config.TextColumn("Quarter"),
+            "prior_quarter": st.column_config.TextColumn("Compared with"),
+            "change_type": st.column_config.TextColumn("Change"),
+            "asset": st.column_config.TextColumn("Issuer", width="medium"),
+            "themes": st.column_config.TextColumn("Themes", width="medium"),
+            "previous_shares": st.column_config.NumberColumn("Prior shares", format="%,.0f"),
+            "current_shares": st.column_config.NumberColumn("Current shares", format="%,.0f"),
+            "share_change": st.column_config.NumberColumn("Share change", format="%+,.0f"),
+            "weight_change_pp": st.column_config.NumberColumn("Weight change", format="%+.2f pp"),
+            "current_value_usd": st.column_config.NumberColumn("Current value", format="$%,.0f"),
+            "classification_confidence": st.column_config.NumberColumn("Tag confidence", format="%.2f"),
+            "classification_evidence": st.column_config.TextColumn("Classification evidence", width="large"),
+            "classification_source_url": st.column_config.TextColumn("Tag source", width="large"),
+            "filing_url": st.column_config.LinkColumn("SEC filing", display_text="Open filing"),
+        },
+    )
+    _download_table("Download position changes", linked, "duquesne_theme_position_changes.csv", "download_duquesne_theme_positions")
+
+    template_columns = ["cusip", "ticker", "issuer", "theme", "confidence", "evidence", "source_url", "model_id"]
+    classification_template = (
+        accumulation[["cusip", "ticker", "issuer"]]
+        .drop_duplicates()
+        .assign(theme="", confidence="", evidence="", source_url="", model_id="")
+        [template_columns]
+    )
+    _download_table(
+        "Download classification template", classification_template,
+        "duquesne_theme_classification_template.csv", "download_duquesne_theme_template",
     )

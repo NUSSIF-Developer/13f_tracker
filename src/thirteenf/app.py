@@ -24,13 +24,18 @@ from thirteenf.backtest_reporting import chart_assumptions, execution_steps, hol
 from thirteenf.config import PROCESSED_DATA_DIR, SEC_USER_AGENT_ENV, SECTOR_OVERRIDE_PATH
 from thirteenf.dashboard import build_dashboard_data
 from thirteenf.quarterly_data import build_quarterly_sector_rotation_window
-from thirteenf.monitor_ui import render_filing_change_monitor, render_sector_research_changes
+from thirteenf.monitor_ui import (
+    render_duquesne_theme_signal,
+    render_filing_change_monitor,
+    render_sector_research_changes,
+)
 from thirteenf.runner import run_sec_ingestion
 from thirteenf.sector import (
     SECTOR_OPTIONS,
     apply_sector_overrides,
     build_overall_sector_rotation,
     load_sector_overrides,
+    fill_ticker_clean,
     save_sector_overrides,
 )
 from thirteenf.ui import apply_theme, page_header
@@ -289,7 +294,7 @@ def _load_snapshot() -> pd.DataFrame:
         str(SECTOR_OVERRIDE_PATH),
         _modified_ns(SECTOR_OVERRIDE_PATH),
     )
-    return apply_sector_overrides(snapshot, overrides)
+    return fill_ticker_clean(apply_sector_overrides(snapshot, overrides))
 
 
 def _unknown_position_summary(snapshot: pd.DataFrame) -> pd.DataFrame:
@@ -650,7 +655,20 @@ def _render_backtest_section(code: str, investor: str, fund_name: str) -> None:
     })
     st.dataframe(rules, width="stretch", hide_index=True)
 
+    events_path = PROCESSED_DATA_DIR / "sec_holdings_events.csv"
     status_path = PROCESSED_DATA_DIR / f"backtest_{code.lower()}_status.json"
+    if events_path.exists() and status_path.exists():
+        events = _read_events_csv(str(events_path), _modified_ns(events_path))
+        accepted = pd.to_datetime(
+            events.loc[events["manager_code"].eq(code), "available_at"], errors="coerce", utc=True,
+        )
+        built_at = pd.Timestamp(status_path.stat().st_mtime, unit="s", tz="UTC")
+        if accepted.notna().any() and accepted.max() > built_at:
+            st.warning(
+                f"A filing accepted {accepted.max():%d %b %Y} is newer than this simulation "
+                "(built " f"{built_at:%d %b %Y}). Rebuild with `python scripts/build_backtests.py` "
+                "to include it."
+            )
     if not status_path.exists():
         st.warning("The repaired historical simulation has not been built yet.")
         return
@@ -838,6 +856,7 @@ def main() -> None:
         "Overview": "Snapshot of the latest disclosed positions and summary of tracked managers.",
         "[All Funds] Sector research": "Compare manager allocations and sector rotation over time.",
         "[Short-Term Funds] Asset Changes": "Track material position changes in accepted quarterly filings.",
+        "[Duquesne] Theme signal": "Review Duquesne share additions by emerging issuer theme.",
         "[Short-Term Funds] Sector changes": "See where short-term managers shifted their disclosed allocations.",
         "[Short-Term Funds] Strategy backtests": "Test disclosed-book strategies using actual SEC acceptance timestamps.",
         "[All Funds] Holdings explorer": "Filter and export the quarterly disclosed positions.",
@@ -869,6 +888,8 @@ def main() -> None:
     elif page in {"[Short-Term Funds] Asset Changes", "[Short-Term Funds] Sector changes"}:
         section = "Asset Changes" if page == "[Short-Term Funds] Asset Changes" else "Sector changes"
         render_filing_change_monitor(snapshot, section=section)
+    elif page == "[Duquesne] Theme signal":
+        render_duquesne_theme_signal(snapshot)
     elif page == "[Short-Term Funds] Strategy backtests":
         strategies = {
             "Duquesne Family Office": ("DUQ", "Stanley Druckenmiller"),

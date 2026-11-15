@@ -5,6 +5,7 @@ from typing import Mapping
 
 import pandas as pd
 
+from thirteenf.normalize import standardize_ticker
 
 # Bootstrap mappings are transparent and intentionally small. Production runs
 # should supply a versioned security master with valid_from/valid_to dates.
@@ -165,6 +166,17 @@ def assign_sector(
         result["sector"] = result["sector"].replace("", pd.NA).fillna(inferred).fillna("Unknown")
     else:
         result["sector"] = inferred.fillna("Unknown")
+    return fill_ticker_clean(result)
+
+
+def fill_ticker_clean(df: pd.DataFrame) -> pd.DataFrame:
+    """Populate blank ``ticker_clean`` values from ``ticker`` so new filings reach every view."""
+    if "ticker" not in df:
+        return df
+    result = df.copy()
+    current = result["ticker_clean"] if "ticker_clean" in result else pd.Series(pd.NA, index=result.index, dtype=object)
+    blank = current.isna() | current.astype(str).str.strip().eq("")
+    result["ticker_clean"] = current.where(~blank, result["ticker"].map(standardize_ticker))
     return result
 
 

@@ -1,0 +1,42 @@
+name: EDGAR refresh
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: edgar-refresh
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - run: pip install -e .
+      - name: Fetch filings and send alerts
+        env:
+          THIRTEENF_SEC_USER_AGENT: ${{ secrets.THIRTEENF_SEC_USER_AGENT }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FORCE_REFRESH: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
+        run: python -m thirteenf.auto_refresh
+      - name: Commit updated data
+        if: always()
+        run: |
+          git config user.name "edgar-refresh[bot]"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/processed/sec_holdings_history.csv data/processed/sec_holdings_events.csv data/processed/notified_accessions.json
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Update SEC 13F data"
+          git pull --rebase
+          git push

@@ -75,3 +75,11 @@ def test_overall_rotation_excludes_zero_value_placeholder_quarters():
     result = build_overall_sector_rotation(holdings)
     assert set(result["quarter"]) == {"2025Q1"}
     assert result["portfolio_weight"].sum() == 100.0
+
+
+def test_fill_ticker_clean_populates_blank_values_from_ticker():
+    from thirteenf.sector import fill_ticker_clean
+
+    frame = pd.DataFrame({'ticker': ['MA', 'BRK.B', None], 'ticker_clean': [None, '', 'X']})
+    result = fill_ticker_clean(frame)
+    assert result['ticker_clean'].tolist() == ['MA', 'BRK-B', 'X']

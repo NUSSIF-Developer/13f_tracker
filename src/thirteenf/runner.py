@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from thirteenf.config import PROCESSED_DATA_DIR, RAW_DATA_DIR, SEC_USER_AGENT_ENV
+from thirteenf.config import DATA_DIR, PROCESSED_DATA_DIR, RAW_DATA_DIR, SEC_USER_AGENT_ENV
 from thirteenf.demo_data import get_demo_snapshot
 from thirteenf.funds import FUND_CONFIG, normalize_cik
 from thirteenf.ingest import prepare_holdings_dataframe
@@ -153,6 +153,9 @@ def fetch_manager_holdings(
         cover_url = documents.get("cover_xml_url") or str(filing.get("primary_document") or "")
         info_url = documents.get("information_table_xml_url", "")
         if not info_url:
+            # Filings before the 2013 XML mandate are plain text and cannot be parsed here.
+            if pd.to_datetime(filing.get("filing_date"), errors="coerce") < pd.Timestamp("2013-06-30"):
+                continue
             raise ValueError(f"Cannot locate information table for {filing['accession_number']}")
 
         accession_dir = target_root / manager_code / str(filing["accession_number"])
@@ -227,7 +230,7 @@ def run_sec_ingestion(
     combined = pd.concat(frames, ignore_index=True)
     events = build_as_of_snapshots(combined)
     history = reconcile_amendments(combined)
-    master_path = Path("data/security_master.csv")
+    master_path = DATA_DIR / "security_master.csv"
     if master_path.exists():
         master = load_security_master(master_path)
         events = assign_sector(events, security_master=master)
