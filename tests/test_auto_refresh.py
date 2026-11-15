@@ -60,7 +60,10 @@ def test_notify_pending_sends_top_moves_and_records_only_on_success():
     assert failures == 0 and notified == {"A2"}
     message = sent[0]
     assert "Akre" in message and "BBB" in message and "+15.00 pp" in message
-    assert "CCC [Full exit]" in message and "DDD [New position]" in message
+    new_section = message.split("Top new positions")[1].split("Top closed positions")[0]
+    closed_section = message.split("Top closed positions")[1].split("Top position increases")[0]
+    assert "DDD" in new_section and "CCC" in closed_section
+    assert "CCC" not in message.split("Top position increases")[1]
     assert "Tech" in message and "Fin" in message
 
     def boom(_text):

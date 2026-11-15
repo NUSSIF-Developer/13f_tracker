@@ -51,11 +51,17 @@ def format_filing_message(
     if positions.empty and sectors.empty:
         parts.append("No prior report available to compare.")
     else:
-        pos_up, pos_down = top_moves(positions, count)
+        change_type = positions.get("change_type", pd.Series("", index=positions.index))
+        opened = positions[change_type.eq("New position")].nlargest(count, "current_weight")
+        closed = positions[change_type.eq("Full exit")].nlargest(count, "previous_weight")
+        adjusted = positions[~change_type.isin(["New position", "Full exit"])]
+        pos_up, pos_down = top_moves(adjusted, count)
         sec_up, sec_down = top_moves(sectors, count)
         parts += [
-            "", "<b>Top position increases</b>", *_lines(pos_up, "asset", True),
-            "<b>Top position decreases</b>", *_lines(pos_down, "asset", True),
+            "", "<b>Top new positions</b>", *_lines(opened, "asset"),
+            "<b>Top closed positions</b>", *_lines(closed, "asset"),
+            "", "<b>Top position increases</b>", *_lines(pos_up, "asset"),
+            "<b>Top position decreases</b>", *_lines(pos_down, "asset"),
             "", "<b>Top sector increases</b>", *_lines(sec_up, "sector"),
             "<b>Top sector decreases</b>", *_lines(sec_down, "sector"),
         ]
