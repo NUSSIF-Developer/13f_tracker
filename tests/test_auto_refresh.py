@@ -1,4 +1,6 @@
 from datetime import date, datetime, timezone
+from pathlib import Path
+import subprocess
 
 import pandas as pd
 
@@ -100,3 +102,71 @@ def test_send_telegram_retries_then_raises(monkeypatch):
     else:
         raise AssertionError("expected failure")
     assert Session.calls == 3
+
+
+def test_send_telegram_reports_safe_bad_request_diagnostics():
+    class Response:
+        ok = False
+        status_code = 400
+
+        def __init__(self, description):
+            self.description = description
+
+        def json(self):
+            return {"description": self.description}
+
+    class Session:
+        def __init__(self, description):
+            self.description = description
+
+        def post(self, *args, **kwargs):
+            return Response(self.description)
+
+    for description, expected in (
+        ("Bad Request: chat not found", "check TELEGRAM_CHAT_ID"),
+        ("Bad Request: can't parse entities: invalid tag", "invalid message formatting"),
+        ("Bad Request: message is too long", "message is too long"),
+        ("private response details", "check chat configuration"),
+    ):
+        try:
+            send_telegram("t", "c", "hi", retries=1, session=Session(description))
+        except RuntimeError as exc:
+            assert expected in str(exc)
+            assert description not in str(exc)
+        else:
+            raise AssertionError("expected failure")
+
+
+def test_refresh_workflow_stages_only_existing_or_tracked_outputs(tmp_path):
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=tmp_path, check=True, capture_output=True, text=True,
+        ).stdout
+
+    git("init", "-q")
+    git("config", "user.name", "test")
+    git("config", "user.email", "test@example.com")
+    data = tmp_path / "data" / "processed"
+    data.mkdir(parents=True)
+    history = data / "sec_holdings_history.csv"
+    events = data / "sec_holdings_events.csv"
+    history.write_text("old")
+    events.write_text("old")
+    git("add", "data")
+    git("commit", "-qm", "initial")
+    history.write_text("new")
+    events.unlink()
+    (data / "unrelated.csv").write_text("unrelated")
+
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/edgar-refresh.yml").read_text()
+    script = workflow.split("      - name: Commit updated data\n", 1)[1]
+    script = script.split("        run: |\n", 1)[1].split("          if git diff", 1)[0]
+    script = "\n".join(line.removeprefix("          ") for line in script.splitlines())
+    subprocess.run(["bash", "-e", "-c", script], cwd=tmp_path, check=True)
+    assert set(git("diff", "--cached", "--name-only").splitlines()) == {
+        "data/processed/sec_holdings_history.csv", "data/processed/sec_holdings_events.csv",
+    }
+
+    (data / "notified_accessions.json").write_text("[]")
+    subprocess.run(["bash", "-e", "-c", script], cwd=tmp_path, check=True)
+    assert "data/processed/notified_accessions.json" in git("diff", "--cached", "--name-only").splitlines()
