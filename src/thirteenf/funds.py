@@ -10,7 +10,7 @@ from typing import Any
 
 
 FUND_CONFIG: dict[str, dict[str, Any]] = {
-    "PSC": {"name": "Pershing Square Capital Management, L.P.", "display_name": "Bill Ackman - Pershing Square", "source": "sec", "fallback_source": "dataroma", "fund_code": "psc", "cik": "0001336528", "aliases": ["PERSHING SQUARE CAPITAL MANAGEMENT, L.P."]},
+    "PSC": {"name": "Pershing Square Capital Management, L.P.", "display_name": "Bill Ackman - Pershing Square", "source": "sec", "fallback_source": "dataroma", "fund_code": "psc", "cik": "0001336528", "aliases": ["PERSHING SQUARE CAPITAL MANAGEMENT, L.P."], "successors": [{"cik": "0002026053", "from_report_period": "2026-06-30", "aliases": ["PERSHING SQUARE INC."]}]},
     "VFC": {"name": "Valley Forge Capital Management, LP", "display_name": "Valley Forge Capital Management", "source": "sec", "fallback_source": "dataroma", "fund_code": "VFC", "cik": "0001697868", "aliases": ["VALLEY FORGE CAPITAL MANAGEMENT, LP", "VALLEY FORGE ADVISORS, L.P."]},
     "AM": {"name": "Appaloosa LP", "display_name": "David Tepper - Appaloosa", "source": "sec", "fallback_source": "dataroma", "fund_code": "AM", "cik": "0001656456", "aliases": ["APPALOOSA LP"], "strategy_horizon_trading_days": 63},
     "AC": {"name": "Akre Capital Management LLC", "display_name": "Chuck Akre - Akre Capital", "source": "sec", "fallback_source": "dataroma", "fund_code": "AC", "cik": "0001112520", "aliases": ["AKRE CAPITAL MANAGEMENT LLC"]},

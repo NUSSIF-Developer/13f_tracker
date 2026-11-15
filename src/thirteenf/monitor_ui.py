@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from thirteenf.config import DATA_DIR
+from thirteenf.delta_tracker import build_delta_long
 from thirteenf.sec_live import filing_html_url
 
 from thirteenf.filing_monitor import (
@@ -589,3 +590,39 @@ def render_duquesne_theme_signal(snapshot: pd.DataFrame) -> None:
         "Download classification template", classification_template,
         "duquesne_theme_classification_template.csv", "download_duquesne_theme_template",
     )
+
+
+@st.cache_data(show_spinner=False)
+def _delta_long_cached(snapshot: pd.DataFrame) -> pd.DataFrame:
+    return build_delta_long(snapshot)
+
+
+def render_delta_tracker(snapshot: pd.DataFrame) -> None:
+    """One tab per fund: asset-by-quarter change matrix with colour coding."""
+    from thirteenf.delta_tracker import METRICS, build_delta_matrix, style_delta_matrix
+    from thirteenf.funds import FUND_CONFIG, manager_name
+
+    long = _delta_long_cached(snapshot)
+    metric = st.radio(
+        "Metric", list(METRICS), format_func=METRICS.get, horizontal=True, key="delta_metric",
+    )
+    # Quarters with no comparison (every fund's first report) are dropped.
+    quarters = sorted(set(long["quarter"].astype(str)), key=lambda q: pd.Period(q, freq="Q").ordinal)
+    shown = st.slider("Recent quarters shown", 2, max(len(quarters), 3), min(8, len(quarters)), key="delta_quarters")
+    quarters = quarters[-shown:]
+    st.caption(
+        "Each cell compares a fund's report with its previous report. Green = increase, red = decrease, "
+        "**New** = position opened. Blank = unchanged or not held. Funds yet to file a quarter show a blank column."
+    )
+    codes = list(FUND_CONFIG)
+    for tab, code in zip(st.tabs([manager_name(c) for c in codes]), codes):
+        with tab:
+            matrix = build_delta_matrix(long, code, metric, quarters).dropna(how="all")
+            if matrix.empty:
+                st.info("No comparable filings for this fund yet.")
+                continue
+            st.dataframe(style_delta_matrix(matrix, metric), width="stretch", height=640)
+            _download_table(
+                "Download matrix", matrix.replace([float("inf")], float("nan")).reset_index(),
+                f"delta_{code.lower()}_{metric}.csv", f"download_delta_{code}",
+            )

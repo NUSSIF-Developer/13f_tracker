@@ -132,6 +132,16 @@ def fetch_manager_holdings(
     if filings.empty:
         return pd.DataFrame()
     validate_manager_identity(str(filings.iloc[0]["entity_name"]), list(metadata.get("aliases", [])))
+    # A manager can move its 13F reporting to a successor filer; only periods from then on are taken from it.
+    for successor in metadata.get("successors", []):
+        successor_filings = fetch_sec_company_filings(
+            normalize_cik(successor["cik"]), count=None, client=client, start_date=successor["from_report_period"],
+        )
+        if successor_filings.empty:
+            continue
+        validate_manager_identity(str(successor_filings.iloc[0]["entity_name"]), list(successor.get("aliases", [])))
+        filings = pd.concat([filings, successor_filings], ignore_index=True)
+        filings = filings.sort_values("acceptance_datetime", ascending=False).reset_index(drop=True)
     if known_accessions is None:
         selected = _selected_periods(filings, quarters=quarters, start_date=start_date)
     else:

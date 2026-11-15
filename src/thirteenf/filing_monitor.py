@@ -25,6 +25,7 @@ def _prepare(snapshot: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     data["quarter"] = pd.PeriodIndex(data["report_period"], freq="Q").astype(str)
     data["portfolio_weight"] = pd.to_numeric(data["portfolio_weight"], errors="coerce").fillna(0.0)
     data["market_value_usd"] = pd.to_numeric(data["market_value_usd"], errors="coerce").fillna(0.0)
+    data["shares"] = pd.to_numeric(data["shares"], errors="coerce").fillna(0.0) if "shares" in data else 0.0
 
     accepted = pd.Series(pd.NaT, index=data.index, dtype="datetime64[ns, UTC]")
     for column in ("acceptance_datetime", "available_at", "filing_date"):
@@ -79,6 +80,7 @@ def _prepare(snapshot: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
             sector=("sector", "last") if "sector" in data else ("fund", "last"),
             portfolio_weight=("portfolio_weight", "sum"),
             market_value_usd=("market_value_usd", "sum"),
+            shares=("shares", "sum"),
         )
         .reset_index(drop=True)
     )

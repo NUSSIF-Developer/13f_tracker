@@ -26,6 +26,7 @@ from thirteenf.dashboard import build_dashboard_data
 from thirteenf.quarterly_data import build_quarterly_sector_rotation_window
 from thirteenf.monitor_ui import (
     render_duquesne_theme_signal,
+    render_delta_tracker,
     render_filing_change_monitor,
     render_sector_research_changes,
 )
@@ -856,6 +857,7 @@ def main() -> None:
         "Overview": "Snapshot of the latest disclosed positions and summary of tracked managers.",
         "[All Funds] Sector research": "Compare manager allocations and sector rotation over time.",
         "[Short-Term Funds] Asset Changes": "Track material position changes in accepted quarterly filings.",
+        "[All Funds] Delta tracker": "Asset-by-quarter change in shares held, one tab per fund.",
         "[Duquesne] Theme signal": "Review Duquesne share additions by emerging issuer theme.",
         "[Short-Term Funds] Sector changes": "See where short-term managers shifted their disclosed allocations.",
         "[Short-Term Funds] Strategy backtests": "Test disclosed-book strategies using actual SEC acceptance timestamps.",
@@ -888,6 +890,8 @@ def main() -> None:
     elif page in {"[Short-Term Funds] Asset Changes", "[Short-Term Funds] Sector changes"}:
         section = "Asset Changes" if page == "[Short-Term Funds] Asset Changes" else "Sector changes"
         render_filing_change_monitor(snapshot, section=section)
+    elif page == "[All Funds] Delta tracker":
+        render_delta_tracker(snapshot)
     elif page == "[Duquesne] Theme signal":
         render_duquesne_theme_signal(snapshot)
     elif page == "[Short-Term Funds] Strategy backtests":
