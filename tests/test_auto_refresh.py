@@ -1,9 +1,12 @@
 from datetime import date, datetime, timezone
 from pathlib import Path
 import subprocess
+from unittest.mock import Mock
 
 import pandas as pd
+import pytest
 
+import thirteenf.auto_refresh as auto_refresh
 from thirteenf.auto_refresh import notify_pending, pending_filings
 from thirteenf.filing_calendar import filing_deadline, in_polling_window, should_poll
 from thirteenf.notify import format_filing_message, send_telegram
@@ -173,3 +176,61 @@ def test_refresh_workflow_stages_only_existing_or_tracked_outputs(tmp_path):
     (data / "notified_accessions.json").write_text("[]")
     subprocess.run(["bash", "-e", "-c", script], cwd=tmp_path, check=True)
     assert "data/processed/notified_accessions.json" in git("diff", "--cached", "--name-only").splitlines()
+
+
+def test_main_sends_successful_filings_despite_failed_manager(monkeypatch, capsys):
+    monkeypatch.setenv("FORCE_REFRESH", "1")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "test-chat")
+
+    def ingest(**kwargs):
+        assert kwargs["incremental"] is True
+        kwargs["on_manager_error"]("TCI", RuntimeError("503 Service Unavailable"))
+        return _history()
+
+    monkeypatch.setattr(auto_refresh, "run_sec_ingestion", ingest)
+    notified, saved = set(), []
+    monkeypatch.setattr(auto_refresh, "load_notified", lambda: notified)
+    monkeypatch.setattr(auto_refresh, "notify_pending", lambda history, pending, sender: notify_pending(
+        history, pending, sender, now=pd.Timestamp("2026-11-14", tz="UTC"),
+        save=lambda values: saved.append(values.copy()),
+    ))
+    sender = Mock()
+    monkeypatch.setattr(auto_refresh, "send_telegram", sender)
+
+    assert auto_refresh.main() == 1
+    sender.assert_called_once()
+    assert sender.call_args.args[:2] == ("test-token", "test-chat")
+    assert "Akre" in sender.call_args.args[2]
+    assert notified == {"A2"} and saved == [{"A2"}]
+    errors = capsys.readouterr().err
+    assert "TCI" in errors and "503" in errors and "next run" in errors
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_main_reports_ingestion_status_without_telegram(monkeypatch, failed):
+    monkeypatch.setenv("FORCE_REFRESH", "1")
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+
+    def ingest(**kwargs):
+        if failed:
+            kwargs["on_manager_error"]("TCI", RuntimeError("503 Service Unavailable"))
+        return pd.DataFrame()
+
+    monkeypatch.setattr(auto_refresh, "run_sec_ingestion", ingest)
+    sender = Mock()
+    monkeypatch.setattr(auto_refresh, "send_telegram", sender)
+    assert auto_refresh.main() == int(failed)
+    sender.assert_not_called()
+
+
+@pytest.mark.parametrize("notification_failures", [0, 1])
+def test_main_preserves_notification_exit_status(monkeypatch, notification_failures):
+    monkeypatch.setenv("FORCE_REFRESH", "1")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "test-chat")
+    monkeypatch.setattr(auto_refresh, "run_sec_ingestion", lambda **kwargs: _history())
+    monkeypatch.setattr(auto_refresh, "load_notified", set)
+    monkeypatch.setattr(auto_refresh, "notify_pending", lambda *args: notification_failures)
+    assert auto_refresh.main() == notification_failures

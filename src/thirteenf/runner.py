@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 import pandas as pd
@@ -202,13 +203,18 @@ def run_sec_ingestion(
     user_agent: str | None = None,
     start_date: str | None = None,
     incremental: bool = False,
+    on_manager_error: Callable[[str, Exception], None] | None = None,
 ) -> pd.DataFrame:
     """Fetch SEC filings and save reconciled history plus as-of events.
 
     Incremental mode downloads only accessions absent from the saved dataset.
     Every affected report period is rebuilt from all of its filings, then merged
     into the existing history so a UI refresh cannot truncate older quarters.
+    In incremental mode, an error callback allows other managers to finish while
+    retaining all saved periods for the failed manager. Without it, errors raise.
     """
+    if on_manager_error is not None and not incremental:
+        raise ValueError("on_manager_error requires incremental=True to preserve failed managers' data")
     client = SECClient(user_agent or os.getenv(SEC_USER_AGENT_ENV, ""))
     target_dir = Path(output_dir) if output_dir else PROCESSED_DATA_DIR
     history_path = target_dir / "sec_holdings_history.csv"
@@ -236,7 +242,10 @@ def run_sec_ingestion(
                 known_accessions=known_accessions,
             )
         except Exception as exc:
-            raise RuntimeError(f"{code}: {type(exc).__name__}: {exc}") from exc
+            if on_manager_error is None:
+                raise RuntimeError(f"{code}: {type(exc).__name__}: {exc}") from exc
+            on_manager_error(code, exc)
+            continue
         if not frame.empty:
             frames.append(frame)
 

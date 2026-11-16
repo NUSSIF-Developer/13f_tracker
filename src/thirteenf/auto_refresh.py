@@ -90,15 +90,28 @@ def main() -> int:
     if not should_poll(datetime.now(timezone.utc)) and not os.getenv("FORCE_REFRESH"):
         print("Outside the filing window; nothing to do.")
         return 0
+    failed_managers: list[str] = []
+
+    def report_manager_error(code: str, exc: Exception) -> None:
+        failed_managers.append(code)
+        print(f"{code}: {type(exc).__name__}: {exc}. Retaining saved data and continuing.", file=sys.stderr)
+
     history = run_sec_ingestion(
         user_agent=os.getenv(SEC_USER_AGENT_ENV, ""), quarters=2, incremental=True,
+        on_manager_error=report_manager_error,
     )
+    if failed_managers:
+        print(
+            f"Incomplete SEC refresh for {', '.join(failed_managers)}; these managers will be retried "
+            "on the next run. Successful updates have been saved.",
+            file=sys.stderr,
+        )
     token, chat_id = os.getenv("TELEGRAM_BOT_TOKEN", ""), os.getenv("TELEGRAM_CHAT_ID", "")
     if not token or not chat_id:
-        print("Telegram is not configured; data refreshed without alerts.")
-        return 0
+        print("Telegram is not configured; skipping alerts.")
+        return 1 if failed_managers else 0
     failures = notify_pending(history, load_notified(), lambda text: send_telegram(token, chat_id, text))
-    return 1 if failures else 0
+    return 1 if failed_managers or failures else 0
 
 
 if __name__ == "__main__":

@@ -33,6 +33,13 @@ Raw SEC documents are stored under `data/raw/sec/`. Reconciled history is
 written to `data/processed/sec_holdings_history.csv`; point-in-time amendment
 events are written to `data/processed/sec_holdings_events.csv`.
 
+The scheduled `python -m thirteenf.auto_refresh` command continues with other
+managers when one fails after retries. It preserves the failed manager's saved
+history, saves successful updates, and sends alerts for available filings. An
+incomplete refresh still exits with an error and names the affected managers;
+the workflow commits successful updates even then, and retries missing filings
+on the next run. Individual SEC retries log the URL, failure, and attempt number.
+
 Dataroma is an explicit fallback/validation source:
 
 ```powershell

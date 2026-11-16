@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 import re
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urljoin, urlsplit
@@ -18,6 +19,7 @@ from thirteenf.funds import normalize_cik
 
 SEC_BASE = "https://www.sec.gov"
 SEC_DATA_BASE = "https://data.sec.gov"
+logger = logging.getLogger(__name__)
 FILING_COLUMNS = [
     "cik", "entity_name", "accession_number", "form", "filing_date",
     "report_period", "acceptance_datetime", "primary_document", "index_url",
@@ -65,17 +67,24 @@ class SECClient:
                 time.sleep(wait)
             try:
                 response = self.session.get(url, timeout=self.timeout)
-            except (requests.Timeout, requests.ConnectionError):
+            except (requests.Timeout, requests.ConnectionError) as exc:
                 if attempt + 1 == self.max_retries:
                     raise
+                reason = type(exc).__name__
             else:
                 if response.status_code not in {429, 500, 502, 503, 504} or attempt + 1 == self.max_retries:
                     response.raise_for_status()
                     return response
+                reason = f"HTTP {response.status_code}"
             finally:
                 # Failed requests count toward the rate limit, too.
                 self._last_request_at = time.monotonic()
-            time.sleep(2 ** attempt)
+            delay = 2 ** attempt
+            logger.warning(
+                "SEC request %s failed (%s); retrying in %ss (attempt %s/%s)",
+                url, reason, delay, attempt + 2, self.max_retries,
+            )
+            time.sleep(delay)
 
     def get_json(self, url: str) -> dict[str, Any]:
         return self._get(url).json()
