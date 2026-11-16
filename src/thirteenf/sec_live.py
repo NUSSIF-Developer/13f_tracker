@@ -45,11 +45,13 @@ class SECClient:
     user_agent: str
     min_interval_seconds: float = 0.12
     timeout: int = 30
-    max_retries: int = 3
+    max_retries: int = 3  # Total attempts, including the initial request.
     session: requests.Session = field(default_factory=requests.Session)
     _last_request_at: float = field(default=0.0, init=False)
 
     def __post_init__(self) -> None:
+        if self.max_retries < 1:
+            raise ValueError("max_retries must be at least 1")
         self.user_agent = sec_user_agent(self.user_agent)
         self.session.headers.update({
             "User-Agent": self.user_agent,
@@ -61,15 +63,19 @@ class SECClient:
             wait = self.min_interval_seconds - (time.monotonic() - self._last_request_at)
             if wait > 0:
                 time.sleep(wait)
-            response = self.session.get(url, timeout=self.timeout)
-            self._last_request_at = time.monotonic()
-            if response.status_code not in {429, 500, 502, 503, 504}:
-                response.raise_for_status()
-                return response
-            if attempt + 1 < self.max_retries:
-                time.sleep(2 ** attempt)
-        response.raise_for_status()
-        return response
+            try:
+                response = self.session.get(url, timeout=self.timeout)
+            except (requests.Timeout, requests.ConnectionError):
+                if attempt + 1 == self.max_retries:
+                    raise
+            else:
+                if response.status_code not in {429, 500, 502, 503, 504} or attempt + 1 == self.max_retries:
+                    response.raise_for_status()
+                    return response
+            finally:
+                # Failed requests count toward the rate limit, too.
+                self._last_request_at = time.monotonic()
+            time.sleep(2 ** attempt)
 
     def get_json(self, url: str) -> dict[str, Any]:
         return self._get(url).json()

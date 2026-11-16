@@ -142,6 +142,15 @@ def fetch_manager_holdings(
         validate_manager_identity(str(successor_filings.iloc[0]["entity_name"]), list(successor.get("aliases", [])))
         filings = pd.concat([filings, successor_filings], ignore_index=True)
         filings = filings.sort_values("acceptance_datetime", ascending=False).reset_index(drop=True)
+
+    # SEC replaced text-based 13F filings with XML on May 20, 2013.
+    # Exclude unsupported filings before checking for unseen accessions: skipped
+    # filings never enter saved history and would otherwise be fetched every run.
+    filing_dates = pd.to_datetime(filings["filing_date"], errors="coerce")
+    filings = filings[~filing_dates.lt(pd.Timestamp("2013-05-20"))]
+    if filings.empty:
+        return pd.DataFrame()
+
     if known_accessions is None:
         selected = _selected_periods(filings, quarters=quarters, start_date=start_date)
     else:
@@ -163,9 +172,6 @@ def fetch_manager_holdings(
         cover_url = documents.get("cover_xml_url") or str(filing.get("primary_document") or "")
         info_url = documents.get("information_table_xml_url", "")
         if not info_url:
-            # Filings before the 2013 XML mandate are plain text and cannot be parsed here.
-            if pd.to_datetime(filing.get("filing_date"), errors="coerce") < pd.Timestamp("2013-06-30"):
-                continue
             raise ValueError(f"Cannot locate information table for {filing['accession_number']}")
 
         accession_dir = target_root / manager_code / str(filing["accession_number"])
